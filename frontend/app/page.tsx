@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
 import { QRCodeSVG } from "qrcode.react";
-import { Droplet, ShoppingBag, CheckCircle, CreditCard, ArrowLeft, LogOut, Lock, Mail, User } from "lucide-react";
+import { Droplet, ShoppingBag, CheckCircle, CreditCard, ArrowLeft, LogOut, Lock, Mail, User, MessageCircle } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 
 // --- INICIALIZAR SUPABASE EN EL FRONTEND ---
@@ -28,6 +28,7 @@ export default function AppInnovaYeti() {
   const [planSeleccionado, setPlanSeleccionado] = useState<any>(null);
   const [referencia, setReferencia] = useState("");
   const [mensajePago, setMensajePago] = useState("");
+  const [linkWhatsapp, setLinkWhatsapp] = useState(""); // NUEVO: Guarda el link de WS
 
   const planes = [
     { id: 1, nombre: "Plan Básico", bidones: 5, precio: 10 },
@@ -45,7 +46,6 @@ export default function AppInnovaYeti() {
     
     verificarSesion();
 
-    // Escuchar si el usuario inicia o cierra sesión
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUsuario(session?.user || null);
     });
@@ -113,6 +113,7 @@ export default function AppInnovaYeti() {
     }
   };
 
+  // --- NUEVO: FUNCIÓN DE PAGO BLINDADA ---
   const enviarPago = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!planSeleccionado || !referencia) return;
@@ -123,8 +124,19 @@ export default function AppInnovaYeti() {
         cantidad_bidones: planSeleccionado.bidones, monto_usd: planSeleccionado.precio,
         metodo_pago: "Pago Movil", referencia: referencia
       });
+
+      // Preparar el mensaje de WhatsApp
+      const mensajeWS = `Hola Innova Yeti! 🧊\nAcabo de solicitar el *${planSeleccionado.nombre}*.\n\nMi referencia de pago es: *${referencia}*.\n\nPor favor aprueba mi recarga de bidones.`;
+      const url = `https://wa.me/5547992371826?text=${encodeURIComponent(mensajeWS)}`;
+      
+      setLinkWhatsapp(url);
       setMensajePago(`¡Reporte enviado exitosamente!`);
-      setReferencia(""); setPlanSeleccionado(null);
+      
+      // Intentar abrir WhatsApp automáticamente
+      window.open(url, '_blank');
+
+      setReferencia(""); 
+      setPlanSeleccionado(null);
     } catch (error) {
       alert("Error al enviar el reporte.");
     } finally {
@@ -184,7 +196,7 @@ export default function AppInnovaYeti() {
     <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8 flex flex-col items-center font-sans">
       <div className="w-full max-w-md bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-700 mb-6 flex justify-between items-center relative">
         {vista === "recargas" ? (
-          <button onClick={() => {setVista("inicio"); setMensajePago(""); cargarSaldoReal();}} className="text-slate-400 hover:text-white flex items-center gap-2">
+          <button onClick={() => {setVista("inicio"); setMensajePago(""); setLinkWhatsapp(""); cargarSaldoReal();}} className="text-slate-400 hover:text-white flex items-center gap-2">
             <ArrowLeft size={20}/> Volver
           </button>
         ) : (
@@ -238,7 +250,16 @@ export default function AppInnovaYeti() {
             <div className="text-center p-6 bg-green-900/30 border border-green-500/50 rounded-xl">
               <CheckCircle size={48} className="text-green-400 mx-auto mb-4" />
               <h2 className="text-xl font-bold text-green-300 mb-2">¡Reporte Recibido!</h2>
-              <p className="text-slate-400 text-xs mt-4">Tus bidones aparecerán en tu inicio en cuanto el administrador los apruebe.</p>
+              <p className="text-slate-300 text-sm mt-2">Tu pedido está en revisión.</p>
+              
+              {/* BOTÓN DE WHATSAPP POR SI FALLA EL POPUP */}
+              {linkWhatsapp && (
+                <a href={linkWhatsapp} target="_blank" rel="noreferrer" className="mt-6 w-full py-3 rounded-xl font-bold text-md bg-green-600 hover:bg-green-500 text-white flex justify-center items-center gap-2 shadow-lg transition-all">
+                  <MessageCircle size={20} /> Enviar Comprobante
+                </a>
+              )}
+
+              <p className="text-slate-400 text-xs mt-4">Tus bidones aparecerán en tu inicio en cuanto el administrador valide el comprobante por WhatsApp.</p>
             </div>
           ) : (
             <form onSubmit={enviarPago}>
@@ -257,9 +278,9 @@ export default function AppInnovaYeti() {
               {planSeleccionado && (
                 <div>
                   <h2 className="text-lg font-bold mb-2">2. Reporta tu pago:</h2>
-                  <input type="text" placeholder="Referencia" value={referencia} onChange={(e) => setReferencia(e.target.value)} className="w-full p-4 rounded-xl bg-slate-900 border border-slate-600 mb-4 text-white" required />
+                  <input type="text" placeholder="Referencia de Pago Móvil" value={referencia} onChange={(e) => setReferencia(e.target.value)} className="w-full p-4 rounded-xl bg-slate-900 border border-slate-600 mb-4 text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all" required />
                   <button type="submit" disabled={cargandoAccion} className="w-full py-4 rounded-xl font-bold text-lg bg-green-500 hover:bg-green-400 text-white shadow-lg">
-                    {cargandoAccion ? "Enviando..." : "Enviar Reporte"}
+                    {cargandoAccion ? "Procesando..." : "Confirmar y Avisar"}
                   </button>
                 </div>
               )}

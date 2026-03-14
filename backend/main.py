@@ -78,7 +78,8 @@ def actualizar_tasa_en_db():
 def ver_productos():
     try:
         productos = supabase.table("productos").select("*").execute()
-        tasa = float(supabase.table("configuracion").select("valor").eq("clave", "tasa_bcv").single().execute().data['valor'])
+        config = supabase.table("configuracion").select("valor").eq("clave", "tasa_bcv").single().execute()
+        tasa = float(config.data['valor'])
         return [{**p, 'precio_bs': round(p['precio_usd'] * tasa, 2)} for p in productos.data]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -88,6 +89,8 @@ def ver_productos():
 def obtener_saldo(usuario_id: str):
     try:
         res = supabase.table("perfiles").select("saldo_bidones").eq("id", usuario_id).single().execute()
+        if not res.data:
+            return {"saldo": 0}
         return {"saldo": res.data["saldo_bidones"]}
     except Exception as e:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -96,8 +99,10 @@ def obtener_saldo(usuario_id: str):
 @app.post("/crear-pedido")
 def crear_pedido(pedido: NuevoPedido):
     try:
-        perfil = supabase.table("perfiles").select("saldo_bidones").eq("id", pedido.usuario_id).single().execute().data
-        if perfil["saldo_bidones"] < pedido.bidones_a_usar: 
+        res_perfil = supabase.table("perfiles").select("saldo_bidones").eq("id", pedido.usuario_id).single().execute()
+        perfil = res_perfil.data
+        
+        if not perfil or perfil["saldo_bidones"] < pedido.bidones_a_usar: 
             raise HTTPException(status_code=400, detail="Saldo insuficiente")
         
         nuevo_saldo = perfil["saldo_bidones"] - pedido.bidones_a_usar
@@ -105,7 +110,8 @@ def crear_pedido(pedido: NuevoPedido):
         
         token_qr = str(uuid.uuid4())
         
-        tasa = float(supabase.table("configuracion").select("valor").eq("clave", "tasa_bcv").single().execute().data['valor'])
+        config = supabase.table("configuracion").select("valor").eq("clave", "tasa_bcv").single().execute()
+        tasa = float(config.data['valor'])
         
         nueva_orden = {
             "usuario_id": pedido.usuario_id,
@@ -129,9 +135,11 @@ def crear_pedido(pedido: NuevoPedido):
 @app.post("/reportar-pago")
 def reportar_pago(pago: ReportePago):
     try:
-        tasa = float(supabase.table("configuracion").select("valor").eq("clave", "tasa_bcv").single().execute().data['valor'])
+        config = supabase.table("configuracion").select("valor").eq("clave", "tasa_bcv").single().execute()
+        tasa = float(config.data['valor'])
         monto_bs = round(pago.monto_usd * tasa, 2)
         
+        # SOLO SE GUARDA EL PAGO COMO PENDIENTE. NO SE SUMAN BIDONES AQUÍ.
         supabase.table("pagos").insert({
             "usuario_id": pago.usuario_id, "plan_comprado": pago.plan_comprado, 
             "cantidad_bidones": pago.cantidad_bidones, "monto_usd": pago.monto_usd, 
@@ -156,11 +164,19 @@ def ver_pagos_pendientes():
 @app.post("/aprobar-pago")
 def aprobar_pago_admin(datos: AprobarPago):
     try:
-        pago = supabase.table("pagos").select("*").eq("id", datos.pago_id).single().execute().data
+        res_pago = supabase.table("pagos").select("*").eq("id", datos.pago_id).single().execute()
+        pago = res_pago.data
+        
+        if not pago:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+            
         if pago["estado"] == "aprobado": 
             return {"mensaje": "Cuidado: Este pago ya fue aprobado anteriormente."}
         
-        saldo_actual = supabase.table("perfiles").select("saldo_bidones").eq("id", pago["usuario_id"]).single().execute().data["saldo_bidones"]
+        res_perfil = supabase.table("perfiles").select("saldo_bidones").eq("id", pago["usuario_id"]).single().execute()
+        saldo_actual = res_perfil.data["saldo_bidones"] if res_perfil.data else 0
+        
+        # AQUÍ ES DONDE SE SUMAN LOS BIDONES REALMENTE
         nuevo_saldo = saldo_actual + pago["cantidad_bidones"]
         
         supabase.table("perfiles").update({"saldo_bidones": nuevo_saldo}).eq("id", pago["usuario_id"]).execute()
@@ -174,7 +190,6 @@ def aprobar_pago_admin(datos: AprobarPago):
 @app.post("/entregar-pedido")
 def entregar_pedido(datos: CompletarEntrega):
     try:
-        # Buscar el pedido usando el código QR
         pedido_res = supabase.table("pedidos").select("*").eq("codigo_qr", datos.qr_token).single().execute()
         
         if not pedido_res.data:
@@ -182,11 +197,9 @@ def entregar_pedido(datos: CompletarEntrega):
             
         pedido = pedido_res.data
         
-        # Evitar doble escaneo
         if pedido["estado"] == "entregado":
             return {"mensaje": "¡Cuidado! Este pedido ya fue entregado anteriormente."}
             
-        # Cambiar el estado a "entregado"
         supabase.table("pedidos").update({"estado": "entregado"}).eq("codigo_qr", datos.qr_token).execute()
         
         return {"mensaje": "¡Agua entregada con éxito! El sistema ha sido actualizado."}
